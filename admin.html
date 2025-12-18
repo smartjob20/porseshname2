@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>پنل تحلیل PSQI | WebLegend</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Tahoma; background: #f0f0f0; padding: 50px; text-align: center; }
+        .card { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }
+        button { background: #8e44ad; color: white; border: none; padding: 15px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 20px;}
+        #status { margin-top: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>مدیریت تست خواب (PSQI)</h1>
+        <p>دانلود خروجی اکسل شامل نمرات ۷ مؤلفه و نمره کل کیفیت خواب</p>
+        <button onclick="downloadPSQI()">📥 دانلود اکسل تحلیل شده</button>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // --- تنظیمات اتصال ---
+        const SUPABASE_URL = 'https://nxpvtkbcsdurhyedpfst.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54cHZ0a2Jjc2R1cmh5ZWRwZnN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMzg2NzQsImV4cCI6MjA4MTYxNDY3NH0.AB36bVcnufe18fbyd-6NIT7VgYOx0HElZKTt_TRZ0cw'; // کلید را اینجا بگذارید
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        async function downloadPSQI() {
+            const status = document.getElementById('status');
+            status.innerText = '⏳ دریافت داده‌ها...';
+
+            const { data: rows, error } = await supabaseClient
+                .from('psqi_responses')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) { status.innerText = 'خطا: ' + error.message; return; }
+            if (!rows.length) { status.innerText = 'داده‌ای یافت نشد.'; return; }
+
+            status.innerText = `در حال پردازش ${rows.length} رکورد...`;
+
+            const processedData = rows.map(row => {
+                const a = row.answers;
+                const p = row.personal_info;
+
+                // --- محاسبات پیچیده PSQI ---
+
+                // 1. مولفه کیفیت ذهنی خواب (دقیقاً نمره سوال 6)
+                let comp1 = a.q6;
+
+                // 2. مولفه تاخیر در به خواب رفتن
+                // امتیاز سوال 2:
+                let q2_score = 0;
+                if (a.q2 <= 15) q2_score = 0;
+                else if (a.q2 <= 30) q2_score = 1;
+                else if (a.q2 <= 60) q2_score = 2;
+                else q2_score = 3;
+                
+                let raw_comp2 = q2_score + a.q5a;
+                let comp2 = 0;
+                if (raw_comp2 === 0) comp2 = 0;
+                else if (raw_comp2 <= 2) comp2 = 1;
+                else if (raw_comp2 <= 4) comp2 = 2;
+                else comp2 = 3;
+
+                // 3. مولفه مدت خواب (سوال 4)
+                let comp3 = 0;
+                if (a.q4 > 7) comp3 = 0;
+                else if (a.q4 >= 6) comp3 = 1;
+                else if (a.q4 >= 5) comp3 = 2;
+                else comp3 = 3;
+
+                // 4. مولفه بازدهی خواب (محاسبه ساعت در رختخواب)
+                // تبدیل زمان ها به تاریخ برای محاسبه اختلاف
+                let bedTime = new Date("2000-01-01 " + a.q1);
+                let wakeTime = new Date("2000-01-01 " + a.q3);
+                if (wakeTime <= bedTime) {
+                    wakeTime.setDate(wakeTime.getDate() + 1); // اگر بیداری فردا صبح است
+                }
+                let hoursInBed = (wakeTime - bedTime) / (1000 * 60 * 60); // تبدیل میلی ثانیه به ساعت
+                
+                let efficiency = (a.q4 / hoursInBed) * 100;
+                let comp4 = 0;
+                if (efficiency > 85) comp4 = 0;
+                else if (efficiency >= 75) comp4 = 1;
+                else if (efficiency >= 65) comp4 = 2;
+                else comp4 = 3;
+
+                // 5. اختلالات خواب (جمع 5b تا 5j)
+                // فرض: در سوالات فقط تا 5i داریم، اگر j هم بود اضافه میشد
+                let sum_5 = (a.q5b || 0) + (a.q5c || 0) + (a.q5d || 0) + (a.q5e || 0) + 
+                            (a.q5f || 0) + (a.q5g || 0) + (a.q5h || 0) + (a.q5i || 0);
+                let comp5 = 0;
+                if (sum_5 === 0) comp5 = 0;
+                else if (sum_5 <= 9) comp5 = 1;
+                else if (sum_5 <= 18) comp5 = 2;
+                else comp5 = 3;
+
+                // 6. استفاده از دارو (سوال 7)
+                let comp6 = a.q7;
+
+                // 7. عملکرد روزانه (سوال 8 + 9)
+                let raw_comp7 = a.q8 + a.q9;
+                let comp7 = 0;
+                if (raw_comp7 === 0) comp7 = 0;
+                else if (raw_comp7 <= 2) comp7 = 1;
+                else if (raw_comp7 <= 4) comp7 = 2;
+                else comp7 = 3;
+
+                // نمره کل PSQI
+                let globalScore = comp1 + comp2 + comp3 + comp4 + comp5 + comp6 + comp7;
+
+                return {
+                    Name: p.name,
+                    Age: p.age,
+                    Bed_Time: a.q1,
+                    Wake_Time: a.q3,
+                    Sleep_Duration: a.q4,
+                    Hours_In_Bed: hoursInBed.toFixed(2),
+                    Sleep_Efficiency_Percent: efficiency.toFixed(1) + '%',
+                    
+                    // نمرات تحلیلی
+                    Comp1_Quality: comp1,
+                    Comp2_Latency: comp2,
+                    Comp3_Duration: comp3,
+                    Comp4_Efficiency: comp4,
+                    Comp5_Disturbance: comp5,
+                    Comp6_Meds: comp6,
+                    Comp7_DayDysfunction: comp7,
+                    
+                    // نمره نهایی
+                    GLOBAL_PSQI_SCORE: globalScore,
+                    Status: globalScore <= 5 ? 'خواب خوب' : 'خواب بی کیفیت'
+                };
+            });
+
+            const worksheet = XLSX.utils.json_to_sheet(processedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "PSQI_Data");
+            XLSX.writeFile(workbook, "PSQI_Analysis.xlsx");
+            
+            status.innerText = '✅ دانلود انجام شد!';
+        }
+    </script>
+</body>
+</html>

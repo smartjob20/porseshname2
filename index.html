@@ -1,0 +1,14 @@
+-- ساخت جدول مخصوص تست خواب پیتزبورگ (PSQI)
+create table public.psqi_responses (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamp with time zone default now(),
+  
+  -- اطلاعات شخصی (نام، سن، شغل و...)
+  personal_info jsonb default '{}'::jsonb,
+  
+  -- پاسخ‌های خام سوالات (زمان‌ها و گزینه‌ها)
+  answers jsonb default '{}'::jsonb
+);
+
+-- غیرفعال کردن محدودیت‌ها برای ثبت راحت داده
+alter table public.psqi_responses disable row level security;
