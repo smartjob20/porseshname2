@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>پنل مدیریت | WebLegend</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+    
+    <style>
+        body { font-family: 'Vazirmatn', sans-serif; background: #f3f4f6; padding: 50px; text-align: center; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 50px; border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.1); max-width: 500px; width: 100%; border: 1px solid rgba(255,255,255,0.8); }
+        h1 { margin-top: 0; color: #1f2937; }
+        p { color: #6b7280; }
+        button { background: linear-gradient(135deg, #4f46e5, #3730a3); color: white; border: none; padding: 18px 40px; font-size: 18px; border-radius: 12px; cursor: pointer; transition: 0.3s; width: 100%; font-family: inherit; font-weight: bold; box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3); }
+        button:hover { transform: translateY(-3px); box-shadow: 0 15px 30px rgba(79, 70, 229, 0.4); }
+        button:active { transform: translateY(0); }
+        #status { margin-top: 25px; font-weight: bold; font-size: 0.95rem; min-height: 20px; }
+        .error { color: #ef4444; }
+        .success { color: #10b981; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔐 پنل مدیریت داده‌ها</h1>
+        <p>دانلود خروجی اکسل تحلیل شده (PSQI)</p>
+        <button onclick="checkAuthAndDownload()">دانلود فایل اکسل</button>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // --- تنظیمات (اینجا کلیدها رو وارد کن) ---
+        const SUPABASE_URL = 'https://nxpvtkbcsdurhyedpfst.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54cHZ0a2Jjc2R1cmh5ZWRwZnN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMzg2NzQsImV4cCI6MjA4MTYxNDY3NH0.AB36bVcnufe18fbyd-6NIT7VgYOx0HElZKTt_TRZ0cw'; // <--- کلید خود را حتما اینجا بگذار
+        
+        // رمز عبور پنل مدیریت (می‌تونی تغییرش بدی)
+        const ADMIN_PASS = "admin123"; 
+
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        async function checkAuthAndDownload() {
+            const status = document.getElementById('status');
+            
+            // 1. درخواست رمز عبور
+            const password = prompt("لطفاً رمز عبور مدیریت را وارد کنید:");
+            if (password !== ADMIN_PASS) {
+                status.className = 'error';
+                status.innerText = '⛔ رمز عبور اشتباه است!';
+                return;
+            }
+
+            status.className = '';
+            status.innerText = '⏳ در حال اتصال به سرور...';
+
+            // 2. دریافت داده‌ها
+            const { data: rows, error } = await supabaseClient
+                .from('psqi_responses')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) { status.className = 'error'; status.innerText = 'خطا: ' + error.message; return; }
+            if (!rows || rows.length === 0) { status.className = 'error'; status.innerText = '⚠️ هیچ داده‌ای یافت نشد.'; return; }
+
+            status.innerText = `🔄 در حال پردازش ${rows.length} پرسش‌نامه...`;
+
+            // 3. پردازش و محاسبه نمرات PSQI
+            const processedData = rows.map(row => {
+                const a = row.answers || {};
+                const p = row.personal_info || {};
+
+                // --- محاسبات دقیق PSQI ---
+                // Comp 1: Subjective Quality
+                let c1 = a.q6 || 0;
+
+                // Comp 2: Sleep Latency
+                let score_q2 = (a.q2 <= 15) ? 0 : (a.q2 <= 30) ? 1 : (a.q2 <= 60) ? 2 : 3;
+                let raw_c2 = score_q2 + (a.q5a || 0);
+                let c2 = (raw_c2 === 0) ? 0 : (raw_c2 <= 2) ? 1 : (raw_c2 <= 4) ? 2 : 3;
+
+                // Comp 3: Sleep Duration
+                let c3 = (a.q4 > 7) ? 0 : (a.q4 >= 6) ? 1 : (a.q4 >= 5) ? 2 : 3;
+
+                // Comp 4: Efficiency
+                // محاسبه اختلاف ساعت خواب و بیداری
+                let bed = new Date("2000-01-01 " + (a.q1 || "00:00"));
+                let wake = new Date("2000-01-01 " + (a.q3 || "00:00"));
+                if (wake <= bed) wake.setDate(wake.getDate() + 1); // اگر بیداری روز بعد است
+                let hoursInBed = (wake - bed) / 36e5; // تبدیل میلی‌ثانیه به ساعت
+                
+                let eff = (hoursInBed > 0) ? (a.q4 / hoursInBed) * 100 : 0;
+                let c4 = (eff > 85) ? 0 : (eff >= 75) ? 1 : (eff >= 65) ? 2 : 3;
+
+                // Comp 5: Disturbances (Sum 5b to 5i)
+                let sum5 = (a.q5b||0)+(a.q5c||0)+(a.q5d||0)+(a.q5e||0)+(a.q5f||0)+(a.q5g||0)+(a.q5h||0)+(a.q5i||0);
+                let c5 = (sum5 === 0) ? 0 : (sum5 <= 9) ? 1 : (sum5 <= 18) ? 2 : 3;
+
+                // Comp 6: Meds
+                let c6 = a.q7 || 0;
+
+                // Comp 7: Dysfunction
+                let raw_c7 = (a.q8 || 0) + (a.q9 || 0);
+                let c7 = (raw_c7 === 0) ? 0 : (raw_c7 <= 2) ? 1 : (raw_c7 <= 4) ? 2 : 3;
+
+                let globalScore = c1 + c2 + c3 + c4 + c5 + c6 + c7;
+
+                return {
+                    "نام": p.name,
+                    "سن": p.age,
+                    "تاریخ ثبت": new Date(row.created_at).toLocaleDateString('fa-IR'),
+                    "نمره کل (PSQI)": globalScore,
+                    "وضعیت خواب": globalScore <= 5 ? "✅ خوب" : "❌ بی‌کیفیت",
+                    "مدت خواب (ساعت)": a.q4,
+                    "بازدهی خواب": eff.toFixed(1) + '%',
+                    // ریز نمرات مولفه‌ها برای پایان‌نامه
+                    "Comp1_Quality": c1, "Comp2_Latency": c2, "Comp3_Duration": c3,
+                    "Comp4_Efficiency": c4, "Comp5_Disturbance": c5, "Comp6_Meds": c6, "Comp7_Dysfunction": c7
+                };
+            });
+
+            // 4. تولید اکسل
+            const worksheet = XLSX.utils.json_to_sheet(processedData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "PSQI Results");
+            XLSX.writeFile(workbook, "PSQI_Data_WebLegend.xlsx");
+            
+            status.className = 'success';
+            status.innerText = '✅ دانلود با موفقیت انجام شد!';
+        }
+    </script>
+</body>
+</html>
